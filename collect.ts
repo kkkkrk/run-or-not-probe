@@ -3,6 +3,8 @@
 //
 //   MODE=q15   15분마다 1회. 도착 전체(ALL) + 7호선 위치
 //              → raw 파일 2개, runs.csv 1줄, lines.csv 노선마다 1줄
+//              평일 07:10~09:30, 17:10~19:30에는 ALL을 20초 작업이 받으므로 7호선 위치만 받는다
+//              → raw/날짜/HHmm-pos7.json.gz, runs.csv 1줄 (mode pos15)
 //   MODE=am20  평일 출근. 09:30 KST까지 20초마다 ALL 1회
 //              → raw/날짜/am-20s.jsonl.gz에 응답마다 한 줄, runs.csv 응답마다 1줄
 //   MODE=pm20  평일 퇴근. 19:30 KST까지 같은 방식 → pm-20s.jsonl.gz
@@ -172,29 +174,29 @@ function appendLineStats(fetchedAt: string, at: Date, rows: Row[]): number {
 }
 
 // ── 상시 15분 ────────────────────────────────────────────────────
+// 응답을 받았으면 { fetchedAt, code, rows } 한 파일로 저장 (raw/날짜/HHmm-name.json.gz)
+function saveRaw(k: ReturnType<typeof kst>, name: string, c: Call, fields: string[]): void {
+  if (!c.ok) {
+    console.log(`${name}: 실패 ${why(c)}`);
+    return;
+  }
+  const dir = `data/raw/${k.date}`;
+  mkdirSync(dir, { recursive: true });
+  const gz = gzipSync(JSON.stringify({ fetchedAt: k.iso, code: c.code, rows: slim(c.rows, fields) }));
+  writeFileSync(`${dir}/${k.hhmm.replace(":", "")}-${name}.json.gz`, gz);
+  console.log(`${name}: ${c.code} ${c.rows.length}행 · raw ${kb(gz.length)}`);
+}
+
 async function runQ15(): Promise<number> {
-  const before = runLines();
+  const before = runLines().filter((l) => l.split(",")[2] === "q15"); // 도착을 부른 15분 실행만
   const t0 = Date.now();
   const arr = await callWithRetry(ARRIVALS, "realtimeArrivalList");
   const pos = await callWithRetry(POS7, "realtimePositionList"); // 두 호출은 차례로
   const k = kst(arr.at); // fetchedAt = 도착 호출 직전 시각
-  const dir = `data/raw/${k.date}`;
-  const stamp = k.hhmm.replace(":", "");
-  // 응답을 받았으면 { fetchedAt, code, rows } 한 파일로 저장
-  const save = (name: string, c: Call, fields: string[]): void => {
-    if (!c.ok) {
-      console.log(`${name}: 실패 ${why(c)}`);
-      return;
-    }
-    mkdirSync(dir, { recursive: true });
-    const gz = gzipSync(JSON.stringify({ fetchedAt: k.iso, code: c.code, rows: slim(c.rows, fields) }));
-    writeFileSync(`${dir}/${stamp}-${name}.json.gz`, gz);
-    console.log(`${name}: ${c.code} ${c.rows.length}행 · raw ${kb(gz.length)}`);
-  };
 
   console.log(`[q15] ${k.iso} (요일 ${k.weekday})`);
-  save("arrivals", arr, ARRIVAL_FIELDS);
-  save("pos7", pos, POS_FIELDS);
+  saveRaw(k, "arrivals", arr, ARRIVAL_FIELDS);
+  saveRaw(k, "pos7", pos, POS_FIELDS);
   const error = [arr.error, pos.error].filter(Boolean).join(" / ");
   appendLine(RUNS, RUNS_HEADER, [k.iso, k.weekday, "q15", arr.code, arr.rows.length, pos.code, pos.rows.length, Date.now() - t0, error]);
   if (arr.ok) console.log(`lines.csv: ${appendLineStats(k.iso, arr.at, arr.rows)}줄`);
@@ -204,6 +206,17 @@ async function runQ15(): Promise<number> {
     console.log("::error::도착 호출 3회 연속 실패");
     return 1;
   }
+  return 0;
+}
+
+// 평일 출근·퇴근 시간: 도착(ALL)은 20초 작업이 받으니 7호선 위치만 받는다 (표 D 유령 열차 대조용)
+async function runPos15(): Promise<number> {
+  const t0 = Date.now();
+  const pos = await callWithRetry(POS7, "realtimePositionList");
+  const k = kst(pos.at); // fetchedAt = 위치 호출 직전 시각
+  console.log(`[pos15] ${k.iso} (요일 ${k.weekday}) · 20초 작업 시간이라 7호선 위치만 받음`);
+  saveRaw(k, "pos7", pos, POS_FIELDS);
+  appendLine(RUNS, RUNS_HEADER, [k.iso, k.weekday, "pos15", "", "", pos.code, pos.rows.length, Date.now() - t0, pos.error]);
   return 0;
 }
 
@@ -290,10 +303,7 @@ async function main(): Promise<number> {
     console.log("END_AT이 지나서 API를 부르지 않고 끝냄");
     return 0;
   }
-  if (MODE === "q15" && !MANUAL && in20sWindow(now)) {
-    console.log("20초 작업이 도는 시간이라 바로 끝냄");
-    return 0;
-  }
+  const pos15 = MODE === "q15" && !MANUAL && in20sWindow(now); // 20초 작업 시간 → 7호선 위치만
   if (!KEY) {
     // 예약 실행은 조용히 넘어간다 (Secret 등록 전에 실패 메일이 쏟아지지 않게)
     console.log(`::${MANUAL ? "error" : "warning"}::SEOUL_API_KEY가 비어 있음 — 레포 Secret을 등록해야 수집이 시작됨`);
@@ -303,6 +313,7 @@ async function main(): Promise<number> {
     console.log(`오늘 runs.csv가 이미 DAILY_CAP(${DAILY_CAP})줄 이상이라 부르지 않고 끝냄`);
     return 0;
   }
+  if (pos15) return runPos15();
   return MODE === "q15" ? runQ15() : run20s(MODE);
 }
 
