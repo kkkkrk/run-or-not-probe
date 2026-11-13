@@ -1,2 +1,5 @@
 fetched_at_kst,weekday,mode,arrivals_code,arrivals_rows,pos7_code,pos7_rows,duration_ms,error
 2026-11-14T00:09:40+09:00,6,q15,INFO-000,2128,INFO-000,18,3234,
+2026-11-14T00:11:21+09:00,6,am20,INFO-000,2093,,,2652,
+2026-11-14T00:11:41+09:00,6,am20,INFO-000,2113,,,2078,
+2026-11-14T00:12:01+09:00,6,am20,INFO-000,2108,,,2093,
