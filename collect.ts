@@ -338,9 +338,15 @@ async function run20s(mode: Mode20): Promise<number> {
 }
 
 // ── keeper ───────────────────────────────────────────────────────
-// 넘기는 시각: 시작 + KEEPER_HOURS. 그 사이에 20초 창이 걸려 끝까지 못 가면 창 시작 15분 전에 넘긴다
+// 넘기는 시각: 시작 + KEEPER_HOURS 안에서 마지막 15분 눈금의 3분 뒤 (다음 keeper가 뜰 시간을 12분 남김).
+// 그 사이에 20초 창이 걸려 끝까지 못 가면 창 시작 15분 전(06:55 · 16:55)에 넘긴다
 function planHandoff(t0: number): number {
-  let h = t0 + KEEPER_HOURS * 3_600_000;
+  const limit = t0 + KEEPER_HOURS * 3_600_000;
+  let slot = nextSlot(limit);
+  if (slot > limit) slot -= SLOT_MS;
+  let h = slot + 3 * 60_000;
+  if (h > limit) h -= SLOT_MS;
+  if (h <= t0) h = limit; // KEEPER_HOURS가 아주 짧을 때
   const w = nextWindow(t0);
   if (w && w.start < h && w.end > h && w.start - 15 * 60_000 > t0) h = w.start - 15 * 60_000;
   return Math.min(h, END_AT);
