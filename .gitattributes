@@ -1,0 +1,2 @@
+# runs.csv · lines.csv는 덧붙이기만 한다. 두 작업이 동시에 줄을 더해도 충돌 없이 양쪽 줄을 다 남긴다
+data/*.csv merge=union

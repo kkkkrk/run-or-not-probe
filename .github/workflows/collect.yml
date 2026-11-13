@@ -1,0 +1,87 @@
+name: collect
+
+on:
+  schedule:
+    - cron: "7,22,37,52 * * * *" # 상시 15분 (정각은 GitHub 스케줄이 몰려서 피함)
+    - cron: "10 22 * * 0-4" # 출근 20초: 평일 07:10 KST (UTC로는 일~목 22:10)
+    - cron: "10 8 * * 1-5" # 퇴근 20초: 평일 17:10 KST (UTC 08:10)
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "q15 = 지금 1회 수집 / am20 · pm20 = 20초 수집을 지금 test_calls번"
+        type: choice
+        options: [q15, am20, pm20]
+        default: q15
+      test_calls:
+        description: "am20 · pm20를 손으로 돌릴 때 부를 횟수"
+        default: "3"
+
+permissions:
+  contents: write
+
+env:
+  END_AT: "2026-11-23T19:30:00+09:00" # 이 시각이 지나면 API를 부르지 않고 바로 끝난다
+  DAILY_CAP: "3000" # 오늘(KST) runs.csv 줄 수가 이 값 이상이면 부르지 않는다
+  MANUAL: ${{ github.event_name == 'workflow_dispatch' && '1' || '' }}
+
+jobs:
+  # 상시 15분: ALL 1회 + 7호선 위치 1회. 평일 07:10~09:30, 17:10~19:30 KST에는 바로 끝난다
+  q15:
+    if: github.event.schedule == '7,22,37,52 * * * *' || inputs.mode == 'q15'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10 # 20초 파일이 쌓이면 checkout이 무거워져서 여유를 둠
+    concurrency:
+      group: collect-q15
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - name: collect
+        run: node collect.ts
+        env:
+          MODE: q15
+          SEOUL_API_KEY: ${{ secrets.SEOUL_API_KEY }}
+      - name: commit
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data
+          git diff --cached --quiet && exit 0
+          git commit -m "data: $(TZ=Asia/Seoul date '+%Y-%m-%d %H:%M') q15"
+          for i in 1 2 3; do git pull --rebase && git push && exit 0; sleep 5; done
+          exit 1
+
+  # 출근 · 퇴근 20초: 작업 하나가 09:30(출근) · 19:30(퇴근) KST까지 20초마다 ALL 1회, 끝날 때 한 번 커밋
+  rush20:
+    if: github.event.schedule == '10 22 * * 0-4' || github.event.schedule == '10 8 * * 1-5' || (inputs.mode && inputs.mode != 'q15')
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    concurrency:
+      group: collect-20s
+      cancel-in-progress: false
+    env:
+      MODE: ${{ github.event.schedule == '10 22 * * 0-4' && 'am20' || github.event.schedule == '10 8 * * 1-5' && 'pm20' || inputs.mode }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - name: collect
+        timeout-minutes: 140
+        run: node collect.ts
+        env:
+          MAX_CALLS: ${{ github.event_name == 'workflow_dispatch' && inputs.test_calls || '400' }}
+          SEOUL_API_KEY: ${{ secrets.SEOUL_API_KEY }}
+      - name: commit
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data
+          git diff --cached --quiet && exit 0
+          git commit -m "data: $(TZ=Asia/Seoul date '+%Y-%m-%d %H:%M') $MODE"
+          for i in 1 2 3; do git pull --rebase && git push && exit 0; sleep 5; done
+          exit 1
