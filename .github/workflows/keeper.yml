@@ -1,0 +1,84 @@
+name: keeper
+run-name: ${{ github.event_name == 'schedule' && '지킴이' || 'keeper' }}
+
+# GitHub 예약(schedule)이 거의 뜨지 않아서(2026-08 말부터 GitHub 쪽 문제) 예약에 기대지 않고 수집한다.
+# keeper 하나가 5시간 반 동안 15분 · 20초 수집을 직접 하고, 끝나기 전에 다음 keeper를 띄워 이어 간다.
+# 예약은 지킴이로만 쓴다: 가끔이라도 뜨면 keeper가 도는지 보고, 없으면 다시 띄운다.
+
+on:
+  workflow_dispatch:
+    inputs:
+      hours:
+        description: "이 keeper가 돌 시간(시간 단위). 다음 keeper부터는 5.5"
+        default: "5.5"
+  schedule:
+    - cron: "3,33 * * * *"
+
+permissions:
+  contents: write
+  actions: write
+
+env:
+  END_AT: "2026-11-23T19:30:00+09:00" # 이 시각이 지나면 수집을 멈추고 다음 keeper도 띄우지 않는다
+  DAILY_CAP: "3000" # 오늘(KST) runs.csv 줄 수가 이 값 이상이면 부르지 않는다
+
+jobs:
+  keep:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    concurrency:
+      group: keeper
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - name: keep
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          node collect.ts
+        env:
+          MODE: keeper
+          KEEPER_HOURS: ${{ inputs.hours || '5.5' }}
+          KEEPER_DISPATCH: "1"
+          GH_TOKEN: ${{ github.token }}
+          SEOUL_API_KEY: ${{ secrets.SEOUL_API_KEY }}
+      - name: commit
+        if: always()
+        run: |
+          git add data
+          git diff --cached --quiet && exit 0
+          git commit -m "data: $(TZ=Asia/Seoul date '+%Y-%m-%d %H:%M') keeper 남은 것"
+          for i in 1 2 3; do git pull --rebase && git push && exit 0; sleep 5; done
+          exit 1
+      # keep 단계가 중간에 죽어서 다음 keeper를 못 띄웠으면 여기서 띄운다 (손으로 취소했을 때는 안 띄움)
+      - name: 다음 keeper 띄우기
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ -f .keeper-handoff ]; then echo "keep 단계가 처리함: $(cat .keeper-handoff)"; exit 0; fi
+          if [ "$(date +%s)" -ge "$(date -d "$END_AT" +%s)" ]; then echo "END_AT 지남"; exit 0; fi
+          gh workflow run keeper.yml -R "$GITHUB_REPOSITORY" --ref main
+          echo "다음 keeper를 띄움"
+
+  watchdog:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: keeper가 도는지 보고 없으면 띄우기
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "$(date +%s)" -ge "$(date -d "$END_AT" +%s)" ]; then echo "END_AT 지남 — 할 일 없음"; exit 0; fi
+          n=$(gh run list -R "$GITHUB_REPOSITORY" --workflow keeper.yml --event workflow_dispatch --limit 20 --json status --jq '[.[] | select(.status != "completed")] | length')
+          if [ "$n" = "0" ]; then
+            gh workflow run keeper.yml -R "$GITHUB_REPOSITORY" --ref main
+            echo "keeper가 없어서 다시 띄움"
+          else
+            echo "keeper 도는 중 ($n)"
+          fi
