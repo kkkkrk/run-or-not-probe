@@ -4777,3 +4777,4 @@ fetched_at_kst,weekday,mode,arrivals_code,arrivals_rows,pos7_code,pos7_rows,dura
 2026-11-22T01:22:00+09:00,0,q15,INFO-000,27,INFO-200,0,1653,
 2026-11-22T01:37:00+09:00,0,q15,INFO-000,40,INFO-200,0,1745,
 2026-11-22T01:52:00+09:00,0,q15,INFO-000,38,INFO-200,0,1616,
+2026-11-22T02:07:20+09:00,0,q15,,0,,0,62020,fetch failed: Connect Timeout Error (attempted address: swopenapi.seoul.go.kr:80 timeout: 10000ms) / fetch failed: Connect Timeout Error (attempted address: swopenapi.seoul.go.kr:80 timeout: 10000ms)
